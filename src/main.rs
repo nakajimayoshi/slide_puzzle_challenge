@@ -1,5 +1,7 @@
+#![allow(warnings)]
 mod util;
 mod test;
+mod api;
 
 use crate::Rune::{SPACE, VALUE, WALL};
 use reqwest::header::HeaderValue;
@@ -15,108 +17,24 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::env::current_exe;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::thread::{current, sleep};
+use chrono::format;
 use colored::Colorize;
+use crossbeam::atomic::AtomicCell;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rayon::prelude::IntoParallelIterator;
+use rayon::prelude::*; // Import the ParallelIterator trait and others
 use serde::de::Error;
-
-async fn get_slide_puzzle(client: &reqwest::Client, puzzle_count: u32) {
-    let url = format!("https://api.foresight.dev.metroweather.net/v1/recruitment/slidepuzzle/generate?count={}", puzzle_count);
-
-    let mut headers = reqwest::header::HeaderMap::new();
-    let accept = "*/*";
-
-    let accept_header = HeaderValue::from_str(accept).unwrap();
-    headers.insert("x-api-key", accept_header);
+use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::mpsc;
+use tokio::task;
+use uuid::Uuid;
+use crate::api::{submit_puzzle, PuzzleSubmissionResponse, SubmitBody};
 
 
-    let res = client.get(url)
-        .headers(headers)
-        .send()
-        .await
-        .unwrap();
-
-
-    if res.status().is_success() {
-        let body = res.text().await.unwrap();
-        let mut file = File::create("slidepuzzle.txt").unwrap();
-
-        match file.write_all(&body.as_bytes()) {
-            Ok(_)  => {
-                println!("saved puzzle to slidepuzzle.txt")
-            },
-            Err(e) => {
-                println!("{:?}", e)
-            }
-        }
-
-    } else {
-        println!("Error: {:?}", res.status());
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct SubmitBody {
-    questions: Vec<u8>,
-    answers: Vec<u8>
-}
-
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct PuzzleSubmissionResponse {
-    response_time: String,
-    score: u64,
-    limit_up: u64,
-    limit_down: u64,
-    limit_left: u64,
-    limit_right: u64,
-    count_up: u64,
-    count_down: u64,
-    count_left: u64,
-    count_right: u64
-}
-
-fn get_file_as_byte_vec(filename: &str) -> Vec<u8> {
-
-    let mut f = File::open(filename).unwrap();
-    let mut buffer = Vec::new();
-
-    f.read_to_end(&mut buffer).unwrap();
-    buffer
-}
-
-async fn submit_puzzle(client: &Client, questions: &str, answers: &str) {
-    const URL: &'static str = "https://api.foresight.dev.metroweather.net/v1/recruitment/slidepuzzle";
-
-    let mut headers = reqwest::header::HeaderMap::new();
-    let accept_header = header::HeaderValue::from_str("application/json");
-    let content_type_header = header::HeaderValue::from_str("multipart/form-data");
-
-    headers.insert("accept", accept_header.unwrap());
-    headers.insert("Content-Type", content_type_header.unwrap());
-
-
-    let body = SubmitBody {
-        questions: get_file_as_byte_vec("slizepuzzle.txt"),
-        answers: get_file_as_byte_vec("slizepuzzle_answers.txt")
-    };
-
-
-    let res = client.post(URL)
-        .headers(headers)
-        .body(serde_json::to_string(&body).unwrap())
-        .send()
-        .await
-        .unwrap();
-
-    if res.status().is_success() {
-        let resp_body = res.text().await.unwrap();
-
-        let resp: PuzzleSubmissionResponse = serde_json::from_str(&resp_body).unwrap();
-
-        println!("{:?}", resp);
-
-    }
-}
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Ord, PartialOrd)]
@@ -165,8 +83,6 @@ const RADIX: u32 = 10;
 impl Puzzle {
     pub fn from_str(str: String) -> Self {
 
-
-        println!("puzzle string: {:?}", str);
         let width= str.chars().nth(0).unwrap().to_digit(RADIX).unwrap();
         let height= str.chars().nth(2).unwrap().to_digit(RADIX).unwrap();
 
@@ -226,9 +142,8 @@ impl Puzzle {
     }
 
     fn is_solved(&self) -> bool {
-        self.generate_hash() == self.solved().generate_hash()
+        self.tiles == self.solved().tiles
     }
-
 
     fn debug_print(&self) {
         print!("┌");
@@ -335,10 +250,10 @@ impl Puzzle {
     }
 
     pub fn moves_str(&self) -> String {
-        self.moves.iter().map( |d| { d.to_char() }).collect()
+        self.moves.iter().map(|d| d.to_char()).collect()
     }
 
-    fn generate_successors(&self) -> (Vec<(Puzzle, Direction)>) {
+    fn generate_successors(&self) -> Vec<(Puzzle, Direction)> {
         let mut result: Vec<(Puzzle, Direction)> = vec![];
 
         for move_ in self.legal_moves() {
@@ -350,88 +265,95 @@ impl Puzzle {
         result
     }
 
-    fn is_solvable(&self) -> bool {
-        let width = self.width as usize;
-        let height = self.height as usize;
-
-        // Flatten the tile board into a single vector, excluding the blank space
-        let tiles: Vec<u32> = self
-            .tiles
-            .iter()
-            .filter(|&tile| tile.raw != '0')// Exclude blank tile represented by '0'
-            .map(|tile| tile.rank() as u32)
-            .collect();
-
-        // Count inversions
-        let inversions = Self::count_inversions(&tiles);
-
-        if width % 2 == 1 {
-            // Odd-width grid: solvable if inversions are even
-            inversions % 2 == 0
-        } else {
-            // Even-width grid: consider row position of the blank space
-            let space_idx = self.space_idx();
-            let space_row_from_bottom = height - (space_idx / width);
-
-            (inversions % 2 == 0 && space_row_from_bottom % 2 == 1)
-                || (inversions % 2 == 1 && space_row_from_bottom % 2 == 0)
-        }
-    }
-
-    // Helper function to count inversions in the tile array
-    fn count_inversions(tiles: &[u32]) -> u32 {
-        let mut inversions = 0;
-        for i in 0..tiles.len() {
-            for j in (i + 1)..tiles.len() {
-                if tiles[i] > tiles[j] {
-                    inversions += 1;
-                }
-            }
-        }
-        inversions
-    }
 
     pub fn solve(&mut self) -> Option<Vec<Direction>> {
-        if !self.is_solvable() {
-            println!("Puzzle is unsolvable.");
-            return None;
-        }
 
         let mut open_list = BinaryHeap::new();
-        let mut closed_list = HashMap::<Puzzle, u32>::new();
+        let mut closed_list = HashSet::new(); // Changed from HashMap to HashSet
         open_list.push((Reverse(self.get_heuristic()), 0, self.clone(), vec![]));
 
+        // Add a maximum iteration limit as a safeguard
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 1000;
+
         while let Some((Reverse(_heuristic), g, puzzle, path)) = open_list.pop() {
-            puzzle.debug_print();
+            // Add iteration limit check
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                return None;
+            }
+
             if puzzle.is_solved() {
-                println!("Solved in {} moves", path.len());
                 *self = puzzle.clone();
                 self.moves = path.clone();
                 return Some(path);
             }
 
-            // Insert into closed_list only if this path is cheaper than any previous path to this state
-            if closed_list.get(&puzzle).map_or(true, |&cost| g < cost) {
-                closed_list.insert(puzzle.clone(), g);
-
+            // Only explore this state if we haven't seen it before
+            if closed_list.insert(puzzle.clone()) {
                 for (neighbor, direction) in puzzle.generate_successors() {
                     let new_cost = g + 1;
                     let heuristic = new_cost + neighbor.get_heuristic();
 
-                    if closed_list.get(&neighbor).map_or(true, |&cost| new_cost < cost) {
-                        let mut new_path = path.clone();
-                        new_path.push(direction);
-                        open_list.push((Reverse(heuristic), new_cost, neighbor, new_path));
-                    }
+                    // Simplified check - we rely on HashSet for visited states
+                    let mut new_path = path.clone();
+                    new_path.push(direction);
+                    open_list.push((Reverse(heuristic), new_cost, neighbor, new_path));
                 }
             }
-
-            println!("hash: {}", puzzle.generate_hash());
-            sleep(std::time::Duration::from_millis(500));
-
         }
 
         None
+    }
+
+    pub fn solve_parallel(&mut self) -> Option<Vec<Direction>> {
+        const NUM_WORKERS: usize = 24;
+
+        let best_solution = Arc::new(AtomicCell::new(None));
+
+        // Shared priority queue for open lists
+        let open_lists: Vec<Mutex<BinaryHeap<_>>> = (0..NUM_WORKERS).map(|_| Mutex::new(BinaryHeap::new())).collect();
+
+        // Initial setup - generate initial paths and assign to open lists
+        for (i, (neighbor, direction)) in self.generate_successors().into_iter().enumerate() {
+            let mut initial_path = vec![direction];
+            let heuristic = neighbor.get_heuristic();
+            open_lists[i % NUM_WORKERS as usize].lock().unwrap().push((Reverse(heuristic), 1, neighbor, initial_path));
+        }
+
+        (0..NUM_WORKERS).into_par_iter().for_each(|worker_id| {
+            let open_list = &open_lists[worker_id];
+            let mut closed_list = HashSet::new();
+
+            while let Some((Reverse(_heuristic), g, puzzle, path)) = open_list.lock().unwrap().pop() {
+                if puzzle.is_solved() {
+                    // Atomically update the best solution found
+                    let solution = Some(path.clone());
+                    best_solution.swap(solution);
+                    return; // Stop this thread since a solution is found
+                }
+
+                // Only explore this state if it hasn't been seen in this thread
+                if closed_list.insert(puzzle.clone()) {
+                    for (neighbor, direction) in puzzle.generate_successors() {
+                        let new_cost = g + 1;
+                        let heuristic = new_cost + neighbor.get_heuristic();
+
+                        let mut new_path = path.clone();
+                        new_path.push(direction);
+                        open_list.lock().unwrap().push((Reverse(heuristic), new_cost, neighbor, new_path));
+                    }
+                }
+
+                // Check if another thread has found a solution
+                if best_solution.take().is_some() {
+                    break; // Exit the loop if a solution is already found
+                }
+            }
+        });
+
+        // Return the best solution found (if any)
+        best_solution.take()
     }
 
     pub fn serialized(&self) -> String {
@@ -499,29 +421,31 @@ impl Puzzle {
     }
 
     fn solved(&self) -> Puzzle {
-        let mut puzzle_answer = self.clone();
+        let mut solved_tiles = self.tiles.clone();
 
-        let mut wall_idxs: Vec<usize> = vec![];
+        // Remove any wall tiles and blank spaces, sort the rest
+        solved_tiles.retain(|tile| tile.raw != '0' && tile.raw != '=');
+        solved_tiles.sort_by(|a, b| a.rank().cmp(&b.rank()));
 
-        let mut idx = 0;
-        for tile in &puzzle_answer.tiles {
-            if tile.rune == WALL {
-                wall_idxs.push(idx)
+        // Add the blank tile ('0') at the end
+        solved_tiles.push(Tile::new('0'));
+
+        // Reinsert wall tiles ('=') in their original positions
+        for (idx, tile) in self.tiles.iter().enumerate() {
+            if tile.raw == '=' {
+                solved_tiles.insert(idx, Tile::new('='));
             }
-            idx+=1
         }
 
-        puzzle_answer.tiles.sort_unstable();
-        puzzle_answer.tiles.retain(|t| t.rune != SPACE);
-        puzzle_answer.tiles.push(Tile::new('0'));
-        puzzle_answer.tiles.retain(|t| t.rune != WALL);
-
-        for idx in wall_idxs {
-            puzzle_answer.tiles.insert(idx, Tile::new('='));
+        // Construct the solved puzzle
+        Puzzle {
+            width: self.width,
+            height: self.height,
+            tiles: solved_tiles,
+            moves: vec![],
         }
-
-        puzzle_answer
     }
+
 
 }
 
@@ -582,8 +506,8 @@ impl Tile {
     pub fn rank(&self) -> i32 {
         match self.raw {
             '1'..='9' => self.raw as i32 - '0' as i32,
-            'A'..='Z' => self.raw as i32 - 'A' as i32 + 10,
-            'a'..='z' => self.raw as i32 - 'a' as i32 + 36,
+            'a'..='z' => self.raw as i32 - 'a' as i32 + 10,
+            'A'..='Z' => self.raw as i32 - 'A' as i32 + 36,
             '0' => 62,
             '=' => -1,
             _ => -1,
@@ -628,39 +552,153 @@ impl Ord for Tile {
 }
 
 
-#[tokio::main]
-async fn main() {
+async fn solve_single_threaded(client: &Client) {
 
-    let client = Client::new();
+    const SLIDE_PUZZLE_COUNT: u32 = 10000;
 
+    let bar = ProgressBar::new(SLIDE_PUZZLE_COUNT as u64);
     if let Ok(puzzles) = fs::File::open("slidepuzzle.txt") {
 
         let reader = BufReader::new(puzzles);
+
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+        let answers_file_name = format!("slide_puzzle_answers.txt_{}", timestamp);
+        let mut answer_file = File::create(answers_file_name.clone()).unwrap();
 
         let mut line_idx = 0;
 
         for line in reader.lines().skip(2) {
 
+            let puzzle_num = line_idx + 1;
             match line {
                 Ok(puzzle_str) => {
                     let mut puzzle = Puzzle::from_str(puzzle_str);
 
                     puzzle.solve();
 
-                    puzzle.debug_print();
+                    if puzzle.is_solved() {
+                        let moves = puzzle.moves_str();
+                        // write puzzle_mum then comma
+                        answer_file.write_all(format!("{},", puzzle_num).as_bytes()).unwrap();
+                        answer_file.write_all(moves.as_bytes()).unwrap();
+                        answer_file.write_all("\n".as_bytes()).unwrap();
+                    } else {
+                        answer_file.write_all("UNSOLVABLE\n".as_bytes()).unwrap();
+                    }
+
                 },
                 Err(e) => {
                     println!("error reading puzzle {:?}", e)
                 }
             }
 
+            bar.inc(1);
+
             line_idx+=1
         }
 
-        // submit_puzzle(&client, "slidepuzzle.txt", "slizepuzzle_answers.txt").await;
+        let res = submit_puzzle(&client, "slidepuzzle.txt", &answers_file_name).await;
+
+        match res {
+            Ok(resp) => {
+                println!("score: {}", resp.score);
+            },
+            Err(e) => {
+                println!("{:?}", e);
+            }
+        }
 
     } else {
-        const SLIDE_PUZZLE_COUNT: u32 = 10000;
-        get_slide_puzzle(&client, SLIDE_PUZZLE_COUNT).await;
+
+        api::get_slide_puzzle(&client, SLIDE_PUZZLE_COUNT).await;
     }
+}
+async fn solve_multithreaded(client: &Client) {
+    use rayon::prelude::*; // Use Rayon for better CPU utilization
+
+    const SLIDE_PUZZLE_COUNT: u32 = 10000;
+    const CHUNK_SIZE: usize = 100;
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+
+    if let Ok(puzzles) = fs::File::open("slidepuzzle.txt") {
+        let file_content = {
+            let mut content = String::new();
+            let mut reader = BufReader::new(&puzzles);
+            reader.read_to_string(&mut content).unwrap();
+            content
+        };
+
+        let puzzle_strings: Vec<String> = file_content.lines().skip(2).map(String::from).collect();
+        let multi_progress = Arc::new(MultiProgress::new());
+        let total_progress = multi_progress.add(ProgressBar::new(puzzle_strings.len() as u64));
+        total_progress.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+                .unwrap(),
+        );
+
+        let answers: Vec<String> = puzzle_strings
+            .par_iter()
+            .enumerate()
+            .map(|(idx, puzzle_str)| {
+                let puzzle_num = idx + 1;
+                let mut puzzle = Puzzle::from_str(puzzle_str.to_string());
+                puzzle.solve();
+
+                let result = if puzzle.is_solved() {
+                    format!("{},{},\n", puzzle_num, puzzle.moves_str())
+                } else {
+                    format!("{},UNSOLVABLE\n", puzzle_num)
+                };
+
+                total_progress.inc(1);
+                result
+            })
+            .collect();
+
+        total_progress.finish_with_message("Completed processing all puzzles");
+
+        let answer_file = File::create(format!("slidepuzzle_answers_{}.txt", timestamp)).unwrap();
+        let mut writer = std::io::BufWriter::new(answer_file);
+
+        for answer in answers.iter() {
+            writer.write_all(answer.as_bytes()).unwrap();
+        }
+
+        let res = submit_puzzle(&client, "slidepuzzle.txt", format!("slidepuzzle_answers_{}.txt", timestamp).as_str()).await;
+
+        match res {
+            Ok(resp) => {
+                println!("score: {}", resp.score);
+            }
+            Err(e) => {
+                println!("{:?}", e);
+            }
+        }
+    } else {
+        api::get_slide_puzzle(&client, SLIDE_PUZZLE_COUNT).await;
+    }
+}
+
+
+
+
+
+#[tokio::main]
+async fn main() {
+    let client = Client::new();
+    // solve_single_threaded(&client).await;
+    solve_multithreaded(&client).await;
+
+    // let res = submit_puzzle(&client, "slidepuzzle.txt", "slide_puzzle_answers.txt_2024-10-27T09-08-07").await;
+    //
+    // match res {
+    //     Ok(resp) => {
+    //         println!("score: {}", resp.score);
+    //     },
+    //     Err(e) => {
+    //         println!("{:?}", e);
+    //     }
+    // }
 }

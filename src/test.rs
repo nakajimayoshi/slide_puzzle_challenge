@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap};
-    use crate::{Direction, Heuristic, Puzzle};
-    use crate::Direction::{DOWN, UP};
+    use crate::{Direction, Heuristic, Puzzle, Tile};
+    use crate::Direction::{DOWN, RIGHT, UP};
     use crate::util::read_puzzles;
 
     #[test]
@@ -133,23 +133,18 @@ mod tests {
 
         puzzle.move_space(Direction::RIGHT).unwrap();
 
+
         assert!(puzzle.is_solved())
     }
 
     #[test]
     fn can_solve() {
-        let puzzle_str = "4,3,12345678a0b=".to_string();
+        let puzzle_str = "4,3,12345678a0C=".to_string();
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
 
-        puzzle.debug_print();
         puzzle.solve();
-
-        puzzle.debug_print();
-
-        println!("moves: {:?}", puzzle.moves);
         assert!(puzzle.is_solved());
-
 
     }
 }
