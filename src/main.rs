@@ -647,7 +647,7 @@ async fn solve_multithreaded(client: &Client) {
                 puzzle.solve();
 
                 let result = if puzzle.is_solved() {
-                    format!("{},{},\n", puzzle_num, puzzle.moves_str())
+                    format!("{},{}\n", puzzle_num, puzzle.moves_str())
                 } else {
                     format!("{},UNSOLVABLE\n", puzzle_num)
                 };
