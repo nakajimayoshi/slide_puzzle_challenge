@@ -4,11 +4,48 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::thread::sleep;
 use rustc_hash::{FxHashSet, FxHasher};
-use crate::{hash_tiles, Direction};
 use crate::tile::Rune::{SPACE, WALL};
 use crate::tile::Tile;
 use crate::traits::puzzle::{DebugPrintable, Heuristic};
 
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Ord, PartialOrd)]
+#[repr(u8)]
+pub enum Direction {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT
+}
+
+impl Direction {
+    pub fn to_char(&self) -> char {
+        match self {
+            Direction::UP => 'U',
+            Direction::DOWN => 'D',
+            Direction::LEFT => 'L',
+            Direction::RIGHT => 'R'
+        }
+    }
+
+    pub fn inverse(&self) -> Direction {
+        match self {
+            Direction::UP => Direction::DOWN,
+            Direction::DOWN => Direction::UP,
+            Direction::LEFT => Direction::RIGHT,
+            Direction::RIGHT => Direction::LEFT
+        }
+    }
+}
+
+pub fn hash_tiles(tiles: &Vec<Tile>) -> u64 {
+    let mut hasher = FxHasher::default();
+
+    for tile in tiles {
+        tile.hash(&mut hasher);
+    }
+
+    hasher.finish()
+}
 
 #[derive(Debug)]
 pub enum PuzzleError {
@@ -25,7 +62,6 @@ impl fmt::Display for PuzzleError {
     }
 }
 
-
 impl std::error::Error for PuzzleError {}
 
 
@@ -38,6 +74,10 @@ pub struct PuzzleRoute {
     state_hash: u64,
     moves: Vec<Direction>,
     direction: PuzzleRouteDirection
+}
+
+pub fn serialize_moves(moves: &Vec<Direction>) -> String {
+    moves.iter().map(|d| d.to_char()).collect()
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialOrd, PartialEq, Hash)]

@@ -7,7 +7,7 @@ mod traits;
 mod puzzle;
 
 use crate::api::submit_puzzle;
-use crate::puzzle::Puzzle;
+use crate::puzzle::{serialize_moves, Puzzle};
 use crate::tile::Tile;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -28,91 +28,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
-
-#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Ord, PartialOrd)]
-#[repr(u8)]
-enum Direction {
-    UP,
-    DOWN,
-    LEFT,
-    RIGHT
-}
-
-pub fn serialize_moves(moves: &Vec<Direction>) -> String {
-    moves.iter().map(|d| d.to_char()).collect()
-}
-
-impl Direction {
-    pub fn to_char(&self) -> char {
-        match self {
-            Direction::UP => 'U',
-            Direction::DOWN => 'D',
-            Direction::LEFT => 'L',
-            Direction::RIGHT => 'R'
-        }
-    }
-
-    pub fn inverse(&self) -> Direction {
-        match self {
-            Direction::UP => Direction::DOWN,
-            Direction::DOWN => Direction::UP,
-            Direction::LEFT => Direction::RIGHT,
-            Direction::RIGHT => Direction::LEFT
-        }
-    }
-}
-
-
-
-fn hash_tiles(tiles: &Vec<Tile>) -> u64 {
-    let mut hasher = FxHasher::default();
-
-    for tile in tiles {
-        tile.hash(&mut hasher);
-    }
-
-    hasher.finish()
-}
-
-
-
-
-type Matrix<T> = Vec<Vec<T>>;
-
-fn tiles_vec_to_matrix(width: u32, height: u32, tiles: Vec<Tile>) -> Vec<Vec<Tile>> {
-    let mut matrix: Vec<Vec<Tile>> = Vec::with_capacity(height as usize);
-    let mut idx = 0;
-
-    for _ in 0..height {
-        let mut row: Vec<Tile> = Vec::with_capacity(width as usize);
-
-        for _ in 0..width {
-            if idx < tiles.len() {
-                row.push(tiles[idx].clone());  // Add tile to the row, clone if necessary
-                idx += 1;
-            }
-        }
-
-        matrix.push(row); // Add the completed row to the matrix
-    }
-
-    matrix
-}
-
-impl PartialOrd for Tile {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for Tile { }
-
-impl Ord for Tile {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.rank().cmp(&other.rank())
-    }
-}
-
 
 async fn solve_single_threaded(client: &Client, pattern_db_client: &mut MultiplexedConnection) {
 

@@ -83,3 +83,22 @@ pub(crate) mod puzzle {
         }
     }
 }
+
+pub(crate) mod tile {
+    use std::cmp::Ordering;
+    use crate::tile::Tile;
+
+    impl PartialOrd for Tile {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Eq for Tile { }
+
+    impl Ord for Tile {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.rank().cmp(&other.rank())
+        }
+    }
+}
