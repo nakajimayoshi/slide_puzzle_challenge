@@ -67,15 +67,15 @@ pub(crate) mod puzzle {
 
 
     pub trait Heuristic {
-        fn get_heuristic(&self, solved_puzzle: &Puzzle) -> u32;
+        fn get_heuristic(&self, solved_puzzle: &Puzzle) -> f32;
     }
 
     impl Heuristic for Puzzle {
-        fn get_heuristic(&self, solved_puzzle: &Puzzle) -> u32 {
-            let mut heuristic: u32 = 0;
+        fn get_heuristic(&self, solved_puzzle: &Puzzle) -> f32 {
+            let mut heuristic: f32 = 0.;
 
             for (idx, tile) in self.tiles.iter().enumerate() {
-                heuristic+=self.manhattan_distance(tile, solved_puzzle);
+                heuristic+=self.manhattan_distance(tile, solved_puzzle) as f32;
                 // heuristic+=2 * self.linear_conflicts(idx)
             }
 

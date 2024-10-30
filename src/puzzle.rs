@@ -2,11 +2,14 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::mem::MaybeUninit;
 use std::thread::sleep;
 use rustc_hash::{FxHashSet, FxHasher};
 use crate::tile::Rune::{SPACE, WALL};
 use crate::tile::Tile;
 use crate::traits::puzzle::{DebugPrintable, Heuristic};
+use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Ord, PartialOrd)]
 #[repr(u8)]
@@ -173,7 +176,7 @@ impl Puzzle {
         score
     }
 
-    pub(crate) fn manhattan_distance(&self, tile: &Tile, solved_puzzle: &Puzzle) -> u32 {
+    pub fn manhattan_distance(&self, tile: &Tile, solved_puzzle: &Puzzle) -> u32 {
         if tile.rune == WALL {
             return 0;  // Walls themselves have no "goal" distance
         }
@@ -343,24 +346,33 @@ impl Puzzle {
         self.moves.iter().map(|d| d.to_char()).collect()
     }
 
-    fn generate_successors(&self, space_idx: usize) -> Vec<Puzzle> {
-        let mut result: Vec<Puzzle> = Vec::with_capacity(4);
+    pub fn generate_successors(&self, space_idx: usize, step: u32) -> Successors {
+        let mut successors = Successors {
+            puzzles: unsafe { MaybeUninit::uninit().assume_init() },
+            count: 0,
+        };
 
-        for move_ in self.legal_moves(space_idx) {
+        // Get legal moves as before
+        for move_ in self.legal_moves(space_idx).into_iter() {
             let mut successor = self.clone();
-            successor.move_space(move_).unwrap();
-            let mut hasher = FxHasher::default();
-            let new_hash = {
+            if successor.move_space(move_).is_ok() {
+                let mut hasher = FxHasher::default();
                 for tile in &successor.tiles {
                     tile.hash(&mut hasher);
                 }
-                hasher.finish()
-            };
-            successor.hash = new_hash;
-            result.push(successor)
+                successor.hash = hasher.finish();
+                successor.g += step;
+
+                // SAFETY: We know this index is valid because count < 4
+                unsafe {
+                    successors.puzzles[successors.count].write(successor);
+                }
+
+                successors.count += 1;
+            }
         }
 
-        result
+        successors
     }
 
     fn is_solvable(&self) -> bool {
@@ -372,32 +384,29 @@ impl Puzzle {
         true
     }
 
-    pub fn solve(&mut self, debug: bool) -> Option<Vec<Direction>> {
-
+    pub fn solve(&mut self, debug: bool, heuristic_threshold: f32) -> Option<Vec<Direction>> {
         const STEP: u32 = 1;
-        // const MAX_ITERATIONS: u32 = 100;
+        const MAX_ITERATIONS: usize = 1000000000;
         let solved_puzzle = self.solved();
 
-        let mut open_list = BinaryHeap::<(Reverse<u32>, Puzzle)>::new();
+        let mut open_list = BinaryHeap::<(Reverse<OrderedFloat<f32>>, Puzzle)>::new();
         let mut closed_list = FxHashSet::default();
 
         let space_idx = self.space_idx();
 
-        for neighbour in self.generate_successors(space_idx) {
+        // Initial successors
+        for neighbour in self.generate_successors(space_idx, STEP) {
             let new_cost = self.g + STEP;
-            let heuristic = new_cost + neighbour.get_heuristic(&solved_puzzle);
-
-            // Return the heuristic, neighbor, and new path
+            let heuristic = OrderedFloat(new_cost as f32 + neighbour.get_heuristic(&solved_puzzle));
             open_list.push((Reverse(heuristic), neighbour));
         }
 
-        // let mut iteration: u32 = 0;
+        let mut iteration = 0;
         while let Some((Reverse(_heuristic), puzzle)) = open_list.pop() {
-
-            // iteration += 1;
-            // if iteration > MAX_ITERATIONS {
-            //     break;
-            // }
+            iteration += 1;
+            if iteration > MAX_ITERATIONS {
+                break;
+            }
 
             if debug {
                 puzzle.debug_print(false);
@@ -407,19 +416,34 @@ impl Puzzle {
 
             if puzzle.is_solved(&solved_puzzle) {
                 *self = puzzle.clone();
-                return Some(self.moves.to_vec())
+                return Some(self.moves.to_vec());
             }
 
-
-            if closed_list.insert(puzzle.hash)  {
+            if closed_list.insert(puzzle.hash) {
                 let space_idx = puzzle.space_idx();
-                for neighbour in puzzle.generate_successors(space_idx) {
-                    let new_cost = puzzle.g + STEP;
-                    let heuristic = new_cost + neighbour.get_heuristic(&solved_puzzle);
+                let successors = puzzle.generate_successors(space_idx, STEP);
 
-                    open_list.push((Reverse(heuristic), neighbour));
+                // Process successors in parallel and collect results
+                let new_states: Vec<_> = successors.par_bridge().into_par_iter().filter_map(|neighbour| {
+                    let g = puzzle.g + STEP;
+                    let h = neighbour.get_heuristic(&solved_puzzle);
+                    let heuristic = OrderedFloat(g as f32 + h);
+
+                    // If the heuristic is too high, skip this state
+                    if heuristic.0 < heuristic_threshold {
+                        Some((Reverse(heuristic), neighbour))
+                    } else {
+                        None
+                    }
+                }).collect();
+
+                // Add all new states to the open list
+                for state in new_states {
+                    open_list.push(state);
                 }
             }
+
+            sleep(std::time::Duration::from_nanos(50));
 
             if debug {
                 sleep(std::time::Duration::from_millis(5));
@@ -493,7 +517,7 @@ impl Puzzle {
     }
 
 
-    pub(crate) fn solved(&self) -> Puzzle {
+    pub fn solved(&self) -> Puzzle {
         let mut solved_tiles = self.tiles.clone();
 
         // Remove any wall tiles and blank spaces, sort the rest
@@ -524,4 +548,40 @@ impl Puzzle {
         }
     }
 
+}
+
+pub struct Successors {
+    puzzles: [MaybeUninit<Puzzle>; 4],
+    count: usize,
+}
+
+impl Successors {
+    // Safe way to get a reference to a puzzle
+    pub fn get(&self, index: usize) -> Option<&Puzzle> {
+        if index < self.count {
+            // SAFETY: We know this index is initialized because count tracks valid puzzles
+            unsafe { Some(&*self.puzzles[index].as_ptr()) }
+        } else {
+            None
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Puzzle> {
+        (0..self.count).filter_map(|i| self.get(i))
+    }
+}
+
+impl Iterator for Successors {
+    type Item = Puzzle;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count > 0 {
+            // SAFETY: We know this index is initialized because count tracks valid puzzles
+            let puzzle = unsafe { self.puzzles[self.count - 1].as_ptr().read() };
+            self.count -= 1;
+            Some(puzzle)
+        } else {
+            None
+        }
+    }
 }
