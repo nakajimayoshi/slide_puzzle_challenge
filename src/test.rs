@@ -27,20 +27,21 @@ mod tests {
 
         for (idx, expected_result) in test_cases {
             let puzzle = puzzles.get(idx).unwrap();
-            let legal_moves = puzzle.legal_moves();
+            let idx = puzzle.space_idx();
+            let legal_moves = puzzle.legal_moves(idx);
             assert_eq!(legal_moves.len(), expected_result.len(), "expected {:?} got {:?}", expected_result, legal_moves);
         }
     }
 
     #[test]
     fn calculates_manhattan_distance_correctly() {
-        let puzzle_str = "3,3,123456708".to_string();
+        let puzzle_str = "3,3,123456708";
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
 
-        // Every tile is in place except 0 and 8 which are 1 move away
+        let solved = puzzle.solved();
         for tile in &puzzle.tiles {
-            let distance = puzzle.manhattan_distance(tile);
+            let distance = puzzle.manhattan_distance(tile, &solved);
 
             if tile.raw == '0' || tile.raw == '8' {
                 assert_eq!(distance, 1);
@@ -50,15 +51,23 @@ mod tests {
         }
 
         // Sum up the distances to get the heuristic
-        assert_eq!(puzzle.get_heuristic(), 2);
+        assert_eq!(puzzle.get_heuristic(&solved), 2);
 
         puzzle.move_space(Direction::RIGHT).unwrap();
 
     }
 
     #[test]
+    fn calculates_inverse_manhattan_distance_correctly() {
+        let puzzle_str = "3,3,12346075=";
+
+        let puzzle = Puzzle::from_str(puzzle_str);
+
+    }
+
+    #[test]
     fn calculates_manhattan_distance_with_walls_correctly() {
-        let puzzle_str = "3,3,12346075=".to_string();
+        let puzzle_str = "3,3,12346075=";
 
         // initial puzzle:
         // 1 2 3
@@ -66,13 +75,14 @@ mod tests {
         // 7 5 =
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
+        let solved = puzzle.solved();
 
         // 0 should be 2 moves away from its target position
         // 6 should be 1 move away from its target position
         // 5 should be 1 move away from its target position
 
         for tile in &puzzle.tiles {
-            let distance = puzzle.manhattan_distance(tile);
+            let distance = puzzle.manhattan_distance(tile, &solved);
 
             if tile.raw == '0' {
                 assert_eq!(distance, 2);
@@ -86,9 +96,7 @@ mod tests {
         }
 
         // Sum up the distances to get the heuristic
-        assert_eq!(puzzle.get_heuristic(), 4);
-
-
+        assert_eq!(puzzle.get_heuristic(&solved), 4);
 
     }
 
@@ -110,7 +118,7 @@ mod tests {
         // cannot move with wall
         assert!(puzzle.move_space(Direction::RIGHT).is_err());
 
-        let puzzle_str = "4,3,12345678a0b=".to_string();
+        let puzzle_str = "4,3,12345678a0b=";
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
 
@@ -127,24 +135,41 @@ mod tests {
     #[test]
     fn check_is_solved_works() {
 
-        let puzzle_str = "3,3,123456708".to_string();
+        let puzzle_str = "3,3,123456708";
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
+        let solved = puzzle.solved();
 
         puzzle.move_space(Direction::RIGHT).unwrap();
 
+        assert!(puzzle.is_solved(&solved));
+    }
 
-        assert!(puzzle.is_solved())
+    #[test]
+    fn can_solve_basic() {
+        let puzzle_str = "4,3,123406785aC=";
+
+        let answer = vec![DOWN, RIGHT, RIGHT];
+
+        let answer_str: String = answer.iter().map(|d| format!("{}", d.to_char())).collect();
+
+        let mut puzzle = Puzzle::from_str(puzzle_str);
+
+        puzzle.solve(false);
+
+        assert_eq!(puzzle.moves_str(), answer_str);
+
     }
 
     #[test]
     fn can_solve() {
-        let puzzle_str = "4,3,12345678a0C=".to_string();
+        let puzzle_str = "3,4,03a21648b579";
 
         let mut puzzle = Puzzle::from_str(puzzle_str);
+        let solved = puzzle.solved();
 
-        puzzle.solve();
-        assert!(puzzle.is_solved());
+        puzzle.solve(false);
 
+        assert!(puzzle.is_solved(&solved))
     }
 }

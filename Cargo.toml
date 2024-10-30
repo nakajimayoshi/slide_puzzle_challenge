@@ -3,15 +3,18 @@ name = "slidePuzzleSolver"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+strip = true
+opt-level = 3
+
 [dependencies]
 chrono = "0.4.38"
 colored = "2.1.0"
-crossbeam = "0.8.4"
-futures = "0.3.31"
 indicatif = "0.17.8"
-rayon = "1.10.0"
+redis = { version = "0.27.5", features = ["tokio-comp"] }
 reqwest = { version = "0.12.8", features = ["multipart", "stream", "json"] }
+rustc-hash = "2.0.0"
 serde = { version = "1.0.213" , features = ["derive"]}
-serde_json = "1.0.132"
+serde_json = { version = "1.0.132", features = ["raw_value"] }
 tokio = { version = "1.41.0", features = ["full"] }
 uuid = { version = "1.11.0", features = ["v4", "fast-rng", "macro-diagnostics"] }

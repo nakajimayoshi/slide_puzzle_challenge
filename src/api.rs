@@ -1,7 +1,5 @@
-use std::f32::consts::E;
 use std::fs::File;
 use std::io::{Read, Write};
-use futures::SinkExt;
 use reqwest::{header, Client};
 use reqwest::header::HeaderValue;
 use reqwest::multipart;

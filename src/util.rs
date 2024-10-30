@@ -12,7 +12,7 @@ pub fn read_puzzles() -> Vec<Puzzle> {
         for line in reader.lines().skip(1) {
             match line {
                 Ok(puzzle_str) => {
-                    let puzzle = Puzzle::from_str(puzzle_str);
+                    let puzzle = Puzzle::from_str(puzzle_str.as_str());
                     result.push(puzzle);
                 },
                 Err(e) => {
