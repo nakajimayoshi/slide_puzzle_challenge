@@ -124,7 +124,7 @@ async fn solve_single_threaded(client: &Client, pattern_db_client: &mut Multiple
         let reader = BufReader::new(puzzles);
 
         let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-        let answers_file_name = format!("slide_puzzle_answers.txt_{}", timestamp);
+        let answers_file_name = format!("slide_puzzle_answers_{}.txt", timestamp);
         let mut answer_file = File::create(answers_file_name.clone()).unwrap();
 
         let mut line_idx: usize = 0;
