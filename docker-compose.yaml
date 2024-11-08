@@ -1,0 +1,7 @@
+services:
+  redis:
+    image: redis:8.0-M02-alpine
+    ports:
+      - "6379:6379"
+    expose:
+      - "6379"

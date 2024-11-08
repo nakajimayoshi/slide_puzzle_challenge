@@ -1,4 +1,6 @@
 /target
 
 *.txt
-!backups/*.txt
+backups/
+.idea/
+redis-data/

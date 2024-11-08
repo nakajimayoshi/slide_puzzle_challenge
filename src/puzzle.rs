@@ -443,8 +443,6 @@ impl Puzzle {
                 }
             }
 
-            sleep(std::time::Duration::from_nanos(50));
-
             if debug {
                 sleep(std::time::Duration::from_millis(5));
             }

@@ -26,7 +26,9 @@ pub struct PuzzleSubmissionResponse {
 }
 
 pub async fn get_slide_puzzle(client: &Client, puzzle_count: u32) {
-    let url = format!("https://api.foresight.dev.metroweather.net/v0/recruitment/slidepuzzle/generate?count={}", puzzle_count);
+
+    assert!(puzzle_count >= 10000);
+    let url = format!("https://api.foresight.dev.metroweather.net/v1/recruitment/slidepuzzle/generate?count={}", puzzle_count);
 
     let mut headers = reqwest::header::HeaderMap::new();
     let accept = "*/*";
